@@ -7,6 +7,7 @@ public class ClientSession
     private readonly SemaphoreSlim _sendLock = new(1, 1);
 
     public string Username { get; }
+    public string Channel { get; set; } = ChatApplication.Common.ChatProtocol.BroadcastChannel;
     public TcpClient Client { get; }
     public NetworkStream Stream { get; }
 

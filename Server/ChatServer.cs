@@ -9,6 +9,8 @@ public class ChatServer
 {
     private readonly TcpListener _listener;
     private readonly ConcurrentDictionary<string, ClientSession> _sessions = new();
+    private readonly ConcurrentDictionary<string, List<string>> _channelHistory = new();
+    private readonly object _historyLock = new();
     private volatile bool _isRunning;
 
     public ChatServer(int port)
@@ -101,19 +103,35 @@ public class ChatServer
             }
 
             session = newSession;
+            session.Channel = ChatProtocol.BroadcastChannel;
             Log($"{username} connected.");
-            await BroadcastAsync($"{username} joined the chat.", session);
+            await AddAndSendAsync(
+                ChatProtocol.BroadcastChannel,
+                $"{username} joined the chat.",
+                session);
+            await SendHistoryAsync(session, ChatProtocol.BroadcastChannel);
 
             while (true)
             {
-                string message = (await Message.ReadMessageAsync(stream)).Trim();
-                if (message.Length == 0)
+                string command = (await Message.ReadMessageAsync(stream)).Trim();
+                if (command.Length == 0)
                 {
                     continue;
                 }
 
-                Log($"{username}: {message}");
-                await BroadcastAsync($"{username}: {message}", null);
+                if (ChatProtocol.TryParseJoin(command, out string channel, out string? privateUsername))
+                {
+                    await SwitchChannelAsync(session, channel, privateUsername);
+                    continue;
+                }
+
+                if (ChatProtocol.TryParseMessage(command, out string message))
+                {
+                    await SendToCurrentChannelAsync(session, message);
+                    continue;
+                }
+
+                await session.SendAsync("ERROR Unknown command.");
             }
         }
         catch (IOException exception)
@@ -132,7 +150,10 @@ public class ChatServer
             {
                 _sessions.TryRemove(session.Username, out _);
                 Log($"{session.Username} disconnected.");
-                await BroadcastAsync($"{session.Username} left the chat.", session);
+                await AddAndSendAsync(
+                    ChatProtocol.BroadcastChannel,
+                    $"{session.Username} left the chat.",
+                    session);
             }
 
             client.Close();
@@ -141,14 +162,62 @@ public class ChatServer
 
     public Task BroadcastAsync(string message)
     {
-        return BroadcastAsync(message, null);
+        return AddAndSendAsync(ChatProtocol.BroadcastChannel, message, null);
     }
 
-    private async Task BroadcastAsync(string message, ClientSession? excludedSession)
+    private async Task SwitchChannelAsync(
+        ClientSession session,
+        string channel,
+        string? privateUsername)
     {
+        if (channel == ChatProtocol.BroadcastChannel)
+        {
+            session.Channel = ChatProtocol.BroadcastChannel;
+            await session.SendAsync("CHANNEL broadcast");
+            await SendHistoryAsync(session, ChatProtocol.BroadcastChannel);
+            return;
+        }
+
+        if (privateUsername is null ||
+            !_sessions.ContainsKey(privateUsername) ||
+            privateUsername.Equals(session.Username, StringComparison.OrdinalIgnoreCase))
+        {
+            await session.SendAsync("ERROR Private user is not connected.");
+            return;
+        }
+
+        session.Channel = ChatProtocol.PrivateChannelKey(session.Username, privateUsername);
+        await session.SendAsync($"CHANNEL private {privateUsername}");
+        await SendHistoryAsync(session, session.Channel);
+    }
+
+    private async Task SendToCurrentChannelAsync(ClientSession sender, string message)
+    {
+        string formatted = $"{sender.Username}: {message}";
+        Log(formatted);
+        await AddAndSendAsync(sender.Channel, formatted, null);
+    }
+
+    private async Task AddAndSendAsync(
+        string channel,
+        string message,
+        ClientSession? excludedSession)
+    {
+        lock (_historyLock)
+        {
+            if (!_channelHistory.TryGetValue(channel, out List<string>? history))
+            {
+                history = new List<string>();
+                _channelHistory[channel] = history;
+            }
+
+            history.Add(message);
+        }
+
         foreach (ClientSession session in _sessions.Values)
         {
-            if (session == excludedSession)
+            if (session == excludedSession ||
+                !session.Channel.Equals(channel, StringComparison.OrdinalIgnoreCase))
             {
                 continue;
             }
@@ -160,13 +229,29 @@ public class ChatServer
             catch (IOException)
             {
                 _sessions.TryRemove(session.Username, out _);
-                Log($"Failed to send a broadcast to {session.Username}.");
+                Log($"Failed to send a channel message to {session.Username}.");
             }
             catch (SocketException)
             {
                 _sessions.TryRemove(session.Username, out _);
-                Log($"Failed to send a broadcast to {session.Username}.");
+                Log($"Failed to send a channel message to {session.Username}.");
             }
+        }
+    }
+
+    private async Task SendHistoryAsync(ClientSession session, string channel)
+    {
+        List<string> history;
+        lock (_historyLock)
+        {
+            history = _channelHistory.TryGetValue(channel, out List<string>? storedHistory)
+                ? [.. storedHistory]
+                : [];
+        }
+
+        foreach (string message in history)
+        {
+            await session.SendAsync(message);
         }
     }
 

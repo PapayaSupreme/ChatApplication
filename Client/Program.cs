@@ -24,6 +24,7 @@ public class Program
             string? username = Console.ReadLine();
 
             await Message.SendMessageAsync(stream, username ?? "");
+            Console.WriteLine("Chatting in broadcast. Use /private <username> or /broadcast to switch channels.");
 
             Task receiveTask = ReceiveMessagesAsync(stream);
             try
@@ -36,9 +37,23 @@ public class Program
                         break;
                     }
 
-                    if (message.Length > 0)
+                    if (message.Equals("/broadcast", StringComparison.OrdinalIgnoreCase))
                     {
-                        await Message.SendMessageAsync(stream, message);
+                        await Message.SendMessageAsync(stream, ChatProtocol.JoinBroadcastCommand);
+                    }
+                    else if (message.StartsWith("/private ", StringComparison.OrdinalIgnoreCase))
+                    {
+                        string privateUsername = message["/private ".Length..].Trim();
+                        if (privateUsername.Length > 0)
+                        {
+                            await Message.SendMessageAsync(
+                                stream,
+                                ChatProtocol.JoinPrivateCommand(privateUsername));
+                        }
+                    }
+                    else if (message.Length > 0)
+                    {
+                        await Message.SendMessageAsync(stream, ChatProtocol.MessageCommand(message));
                     }
                 }
             }
