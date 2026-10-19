@@ -76,7 +76,16 @@ public class Program
         {
             while (true)
             {
-                Console.WriteLine(await Message.ReadMessageAsync(stream));
+                string message = await Message.ReadMessageAsync(stream);
+                if (ChatProtocol.TryParsePrivateMessageNotification(
+                        message,
+                        out string senderUsername))
+                {
+                    Console.WriteLine($"*** New private message from {senderUsername}. ***");
+                    continue;
+                }
+
+                Console.WriteLine(message);
             }
         }
         catch (IOException)

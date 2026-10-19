@@ -196,6 +196,27 @@ public class ChatServer
         string formatted = $"{sender.Username}: {message}";
         Log(formatted);
         await AddAndSendAsync(sender.Channel, formatted, null);
+
+        if (ChatProtocol.TryGetPrivateParticipants(
+                sender.Channel,
+                out string firstUsername,
+                out string secondUsername))
+        {
+            string recipientUsername = firstUsername.Equals(
+                sender.Username,
+                StringComparison.OrdinalIgnoreCase)
+                ? secondUsername
+                : firstUsername;
+
+            if (_sessions.TryGetValue(recipientUsername, out ClientSession? recipient) &&
+                recipient.Channel.Equals(
+                    ChatProtocol.BroadcastChannel,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                await recipient.SendAsync(
+                    ChatProtocol.PrivateMessageNotification(sender.Username));
+            }
+        }
     }
 
     private async Task AddAndSendAsync(

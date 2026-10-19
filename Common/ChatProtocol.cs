@@ -12,6 +12,27 @@ public static class ChatProtocol
     public static string MessageCommand(string message) =>
         $"MESSAGE {message}";
 
+    public static string PrivateMessageNotification(string senderUsername) =>
+        $"NOTIFICATION New private message from {senderUsername}.";
+
+    public static bool TryParsePrivateMessageNotification(
+        string message,
+        out string senderUsername)
+    {
+        const string prefix = "NOTIFICATION New private message from ";
+        const string suffix = ".";
+
+        if (message.StartsWith(prefix, StringComparison.Ordinal) &&
+            message.EndsWith(suffix, StringComparison.Ordinal))
+        {
+            senderUsername = message[prefix.Length..^suffix.Length];
+            return senderUsername.Length > 0;
+        }
+
+        senderUsername = string.Empty;
+        return false;
+    }
+
     public static bool TryParseJoin(
         string command,
         out string channel,
@@ -58,5 +79,28 @@ public static class ChatProtocol
         string[] usernames = [firstUsername, secondUsername];
         Array.Sort(usernames, StringComparer.OrdinalIgnoreCase);
         return $"private:{usernames[0]}:{usernames[1]}";
+    }
+
+    public static bool TryGetPrivateParticipants(
+        string channel,
+        out string firstUsername,
+        out string secondUsername)
+    {
+        const string prefix = "private:";
+        string[] participants = channel.StartsWith(prefix, StringComparison.Ordinal)
+            ? channel[prefix.Length..].Split(':', 2)
+            : [];
+
+        if (participants.Length == 2 &&
+            participants.All(participant => participant.Length > 0))
+        {
+            firstUsername = participants[0];
+            secondUsername = participants[1];
+            return true;
+        }
+
+        firstUsername = string.Empty;
+        secondUsername = string.Empty;
+        return false;
     }
 }
