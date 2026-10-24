@@ -1,10 +1,14 @@
-﻿using System.Net.Sockets;
+using System.Globalization;
+using System.Net.Sockets;
+using System.Text.Json;
 using ChatApplication.Common;
 
 namespace ChatApplication.Client;
 
 public class Program
 {
+    private static string _currentChannel = ChatProtocol.BroadcastChannel;
+
     public static async Task Main()
     {
         TcpClient client = new TcpClient();
@@ -24,7 +28,8 @@ public class Program
             string? username = Console.ReadLine();
 
             await Message.SendMessageAsync(stream, username ?? "");
-            Console.WriteLine("Chatting in broadcast. Use /private <username> or /broadcast to switch channels.");
+            Console.WriteLine(
+                "Chatting in broadcast. Use /private <username>, /broadcast, or stock <ticker>.");
 
             Task receiveTask = ReceiveMessagesAsync(stream);
             try
@@ -49,6 +54,49 @@ public class Program
                             await Message.SendMessageAsync(
                                 stream,
                                 ChatProtocol.JoinPrivateCommand(privateUsername));
+                        }
+                    }
+                    else if (message.Equals("stock", StringComparison.OrdinalIgnoreCase) ||
+                             message.StartsWith("stock ", StringComparison.OrdinalIgnoreCase))
+                    {
+                        if (!StockPriceClient.TryParseCommand(message, out string ticker))
+                        {
+                            Console.WriteLine("Usage: stock <ticker> (for example, stock AAPL).");
+                            continue;
+                        }
+
+                        if (!string.Equals(
+                                Volatile.Read(ref _currentChannel),
+                                ChatProtocol.BroadcastChannel,
+                                StringComparison.OrdinalIgnoreCase))
+                        {
+                            Console.WriteLine("The stock command is only available in the broadcast channel.");
+                            continue;
+                        }
+
+                        try
+                        {
+                            decimal price = await StockPriceClient.GetCurrentPriceAsync(ticker);
+                            await Message.SendMessageAsync(
+                                stream,
+                                ChatProtocol.MessageCommand(
+                                    $"Stock {ticker}: ${price.ToString("0.00", CultureInfo.InvariantCulture)}"));
+                        }
+                        catch (HttpRequestException exception)
+                        {
+                            Console.WriteLine($"Unable to fetch {ticker}: {exception.Message}");
+                        }
+                        catch (TaskCanceledException)
+                        {
+                            Console.WriteLine($"The request for {ticker} timed out.");
+                        }
+                        catch (JsonException)
+                        {
+                            Console.WriteLine($"The stock service returned an invalid value for {ticker}.");
+                        }
+                        catch (InvalidOperationException exception)
+                        {
+                            Console.WriteLine(exception.Message);
                         }
                     }
                     else if (message.Length > 0)
@@ -83,6 +131,15 @@ public class Program
                 {
                     Console.WriteLine($"*** New private message from {senderUsername}. ***");
                     continue;
+                }
+
+                if (message.Equals("CHANNEL broadcast", StringComparison.OrdinalIgnoreCase))
+                {
+                    Volatile.Write(ref _currentChannel, ChatProtocol.BroadcastChannel);
+                }
+                else if (message.StartsWith("CHANNEL private ", StringComparison.OrdinalIgnoreCase))
+                {
+                    Volatile.Write(ref _currentChannel, "private");
                 }
 
                 Console.WriteLine(message);
